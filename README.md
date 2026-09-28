@@ -2,7 +2,7 @@
 
 > A serverless community environmental alert platform for Lima, Peru.
 
-[![Project status: Planning](https://img.shields.io/badge/status-planning-orange)](#project-status)
+[![Project status: In development](https://img.shields.io/badge/status-in%20development-blue)](#project-status)
 [![AWS](https://img.shields.io/badge/cloud-AWS-232F3E?logo=amazonwebservices)](#proposed-aws-architecture)
 [![Infrastructure as Code](https://img.shields.io/badge/IaC-AWS%20SAM-blue)](#technology-stack)
 
@@ -59,15 +59,95 @@ These exclusions keep the first release small enough to deploy, observe, and imp
 |---|---|
 | Problem statement and MVP scope | Documented |
 | Proposed AWS architecture | Documented |
-| Infrastructure as Code | Planned |
-| Scheduled data ingestion | Planned |
-| Alert evaluation | Planned |
-| Read-only API | Planned |
-| Public dashboard | Planned |
-| Opt-in notifications | Planned |
-| Automated tests and deployment pipeline | Planned |
+| Infrastructure as Code | Implemented; SAM validation passing |
+| Environmental ingestion | Lambda and hourly schedule deployed; manual and automatic ingestion verified in AWS |
+| Alert evaluation | Evaluator Lambda deployed; conditional state and transition persistence verified in `dev` |
+| Observation events | Custom EventBridge routing, bounded retries, and SQS dead-letter handling verified in `dev` |
+| Health API | Deployed and publicly verified in the `dev` stage |
+| Latest-observation API | Latest conditions and current location-scoped alert states deployed and publicly verified in `dev` |
+| Observation-history API | Deployed and publicly verified with pagination and validation |
+| Public API contract | OpenAPI 3.1 checked in; four deployed smoke tests passing against `dev` |
+| Public dashboard | Vue 3 TypeScript conditions, alert states, and accessible history experience implemented locally; deployment pending |
+| Opt-in notifications | SNS topic, confirmed opt-in subscription, and transition-only delivery verified in `dev` |
+| Automated tests | 91 backend and 8 frontend tests passing; four opt-in deployed smoke tests passing |
+| Deployment pipeline | Planned |
 
-No production deployment is claimed at this stage. Statuses will be updated as each capability is implemented and verified.
+No production deployment is claimed at this stage. In the `dev` environment in `us-east-1`, manual and hourly scheduled Lambda invocations successfully persisted real Open-Meteo observations for `LIMA_CORPAC`. End-to-end ingestion verified automatic `ObservationRecorded` delivery through the custom EventBridge bus, atomic alert-state persistence, and an empty delivery DLQ. A real UV change from `HIGH` to `ADVISORY` produced one `SEVERITY_CHANGED` message through SNS to a confirmed opt-in subscription; replaying the same observation produced no second transition or notification. The public latest endpoint was then verified returning that same UV state as `ACTIVE/ADVISORY` and US AQI as `INACTIVE`, with state-specific observation timestamps and an informational disclaimer. The health and observation-history routes have also been verified through API Gateway. Local verification includes 91 backend tests, while four opt-in smoke tests pass against the deployed `dev` API. Coverage includes provider-response normalization, idempotent DynamoDB serialization, bounded history pagination, current-alert-state projection, the checked-in OpenAPI contract, pure alert evaluation and transitions, EventBridge and SNS publication, conditional alert-state persistence, Python linting, and AWS SAM template validation.
+
+### Verified development endpoints
+
+```text
+GET https://sjf63cndec.execute-api.us-east-1.amazonaws.com/dev/health
+GET https://sjf63cndec.execute-api.us-east-1.amazonaws.com/dev/v1/locations/LIMA_CORPAC/latest
+GET https://sjf63cndec.execute-api.us-east-1.amazonaws.com/dev/v1/locations/LIMA_CORPAC/history?limit=24
+```
+
+These endpoints belong to a development environment and may change or be removed without notice.
+
+## Local Development
+
+### Prerequisites
+
+- Python 3.13 or 3.14
+- Node.js 24 LTS for dashboard development
+- AWS CLI v2
+- AWS SAM CLI
+- Docker for SAM local emulation
+
+### Set up the Python environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install "pytest>=8.3,<9" "ruff>=0.11,<1"
+```
+
+### Run automated checks
+
+```bash
+python -m pytest
+python -m ruff check .
+sam validate --lint --template-file template.yaml
+```
+
+Expected current result:
+
+```text
+91 passed, 4 skipped
+All checks passed!
+template.yaml is a valid SAM Template
+```
+
+The skipped tests are network-dependent deployment checks. Run them explicitly against a public stage:
+
+```bash
+AYNI_ALERT_API_BASE_URL="https://sjf63cndec.execute-api.us-east-1.amazonaws.com/dev" \
+  python -m pytest backend/tests/smoke
+```
+
+Expected deployed result:
+
+```text
+4 passed
+```
+
+The versioned OpenAPI 3.1 contract is stored at `docs/api/openapi.json`.
+
+### Run the dashboard locally
+
+```bash
+cd frontend
+npm install
+npm run typecheck
+npm run test:run
+npm run dev
+```
+
+The development server proxies `/api` to the verified `dev` API, so local development does not require permissive CORS. Current frontend verification is `8 passed`; proxy checks returned both deployed alert states and 21 recent observations. The history chart supports all four measurements and includes an exact tabular alternative.
+
+### AWS authentication
+
+Use an individual IAM or IAM Identity Center identity with MFA and least privilege. Do not use the root user for development and do not commit access keys. Deployment instructions will be added after the development account, region, budget, and permissions are configured.
 
 ## Proposed AWS Architecture
 
@@ -79,6 +159,7 @@ flowchart LR
     DB[(Amazon DynamoDB)]
     Bus[Amazon EventBridge<br/>Custom event bus]
     Evaluate[AWS Lambda<br/>Alert evaluation]
+    DLQ[Amazon SQS<br/>Evaluation DLQ]
     Topic[Amazon SNS]
     Subscriber[Opt-in subscribers]
     API[Amazon API Gateway<br/>HTTP API]
@@ -93,6 +174,7 @@ flowchart LR
     Ingest --> DB
     Ingest --> Bus
     Bus --> Evaluate
+    Bus -. failed delivery after retries .-> DLQ
     Evaluate --> DB
     Evaluate --> Topic
     Topic --> Subscriber
@@ -113,9 +195,14 @@ flowchart LR
 1. EventBridge Scheduler invokes the ingestion Lambda at a configurable interval.
 2. The function requests current data from the external provider, validates the response, and stores a normalized observation in DynamoDB.
 3. The function publishes an `ObservationRecorded` domain event to EventBridge.
-4. The evaluation Lambda applies versioned threshold rules and records any alert-state transition.
-5. Amazon SNS notifies subscribers only when an alert opens, changes severity, or closes, reducing duplicate notifications.
-6. The public dashboard retrieves current and historical data through a read-only HTTP API.
+4. EventBridge retries a failed target delivery up to two times within one hour, then preserves the undelivered event in an encrypted SQS dead-letter queue.
+5. The evaluation Lambda applies versioned threshold rules and records any alert-state transition.
+6. Amazon SNS notifies subscribers only when an alert opens, changes severity, or closes, reducing duplicate notifications.
+7. The public dashboard retrieves current and historical data through a read-only HTTP API.
+
+`ObservationRecorded` uses at-least-once delivery. If DynamoDB confirms that the observation already exists during a retry, ingestion publishes the event again so a previous EventBridge failure cannot permanently lose it. The evaluator is responsible for ignoring duplicate observation identities and preventing duplicate notifications.
+
+SNS messages are emitted only for committed `OPENED`, `SEVERITY_CHANGED`, and `CLOSED` transitions. Each message includes the location, alert type, severity, observation time, and informational-use disclaimer. Subscriber contact details are managed by SNS subscription confirmation and are never written to the application table. SNS Standard delivery is at least once, so subscribers can still receive a rare delivery duplicate even though unchanged observations do not generate new messages.
 
 ## Why These Services?
 
@@ -147,7 +234,7 @@ The architecture will be revised when implementation evidence exposes different 
 
 - Validate external responses before persistence.
 - Make scheduled ingestion idempotent using location and observation time.
-- Configure bounded retries and dead-letter handling for failed event deliveries.
+- Use bounded retries and encrypted dead-letter handling for failed event deliveries.
 - Preserve the last successful observation while clearly displaying its timestamp and freshness.
 - Notify operators when ingestion has not succeeded within the expected interval.
 
@@ -181,7 +268,7 @@ A single DynamoDB table is proposed for the MVP:
 ```text
 PK                       SK                              Entity
 LOCATION#LIMA_CORPAC     OBSERVATION#<ISO-8601>          Environmental observation
-LOCATION#LIMA_CORPAC     ALERT#<TYPE>#<OPENED_AT>        Alert history
+LOCATION#LIMA_CORPAC     ALERT#<OBSERVED_AT>#<TYPE>      Alert transition history
 LOCATION#LIMA_CORPAC     STATE#<TYPE>                    Current alert state
 ```
 
@@ -199,6 +286,18 @@ The design will not be generalized for multiple locations until that requirement
 The MVP plans to use the [Open-Meteo Weather API](https://open-meteo.com/en/docs) and [Open-Meteo Air Quality API](https://open-meteo.com/en/docs/air-quality-api). Provider attribution, licensing, request limits, and usage conditions will be reviewed before public deployment.
 
 Alert thresholds will be configurable and documented with their sources. AyniAlert will display measurement timestamps and data freshness so users can distinguish current information from stale data.
+
+### Development alert thresholds — ruleset version 1
+
+The provider and the interpretation policy have separate responsibilities. Open-Meteo supplies normalized measurements; the following sources support how enabled measurements are grouped. `ADVISORY`, `HIGH`, and `CRITICAL` are informational AyniAlert labels, not medical diagnoses or official warning levels.
+
+| Measurement | AyniAlert mapping | Status | Rationale and source |
+|---|---|---|---|
+| Apparent temperature | No severity bands | `NOT_CONFIGURED` | Open-Meteo defines the measurement, but no locally applicable risk thresholds have been approved. The value is still collected and displayed; this status must not be interpreted as safe. [Open-Meteo Weather API](https://open-meteo.com/en/docs) |
+| UV index | `< 3`: inactive; `3–<8`: `ADVISORY`; `8+`: `HIGH` | Enabled | WHO recommends protection from UV index 3 and groups values as 3–7 and 8+. [WHO UV index guidance](https://www.who.int/news-room/questions-and-answers/item/radiation-the-ultraviolet-%28uv%29-index) |
+| US AQI | `≤ 100`: inactive; `101–150`: `ADVISORY`; `151–200`: `HIGH`; `201+`: `CRITICAL` | Enabled | AirNow categorizes 101–150 as unhealthy for sensitive groups, 151–200 as unhealthy, and 201+ as very unhealthy or hazardous. [AirNow AQI basics](https://www.airnow.gov/aqi/aqi-basics/) |
+
+The versioned configuration lives in `backend/src/ayni_alert/domain/default_alert_rules.py`. Threshold changes require a new rule version, review, tests, and deployment; they are never hidden inside Lambda handlers.
 
 > **Disclaimer:** AyniAlert is an educational project and an informational tool. It is not a medical device, an official warning system, or a substitute for guidance from health authorities, emergency services, SENAMHI, or other official agencies.
 

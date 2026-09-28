@@ -82,6 +82,8 @@ backend/
 
 Handlers translate AWS events and responses. Application services coordinate use cases. Domain modules contain validation and alert rules. Adapters isolate provider and AWS SDK details. This separation keeps business rules testable without Lambda, DynamoDB, or internet access.
 
+The Vue dashboard follows the same boundary discipline: checked-in API types describe the transport contract, one HTTP service owns request and response validation, a composable owns loading and failure state, and presentational components render measurements and alert states. Local development uses a Vite proxy rather than permissive API CORS; the deployed dashboard origin will be allow-listed when CloudFront exists.
+
 ## 5. Observation Model
 
 ```json
@@ -102,13 +104,15 @@ Handlers translate AWS events and responses. Application services coordinate use
   },
   "source": {
     "provider": "Open-Meteo",
+    "weatherObservedAt": "2026-09-26T15:00:00Z",
+    "airQualityObservedAt": "2026-09-26T15:00:00Z",
     "weatherModel": "provider-selected",
     "airQualityModel": "provider-selected"
   }
 }
 ```
 
-Domain validation rejects non-finite values, missing timestamps, unsupported units, and responses that cannot be combined into a complete observation. The provider timestamp is preserved separately from ingestion time.
+Domain validation rejects non-finite values, missing timestamps, unsupported units, and responses that cannot be combined into a complete observation. Weather and air quality retain independent provider timestamps because their update intervals differ. The observation timestamp is the newest compatible source timestamp and remains separate from ingestion time.
 
 ## 6. DynamoDB Design
 
@@ -161,14 +165,27 @@ id, version, measurement, enabled, severity bands, rationale, source URL
 
 Initial rule types are `APPARENT_TEMPERATURE`, `UV_INDEX`, and `US_AQI`. Exact thresholds must be documented before enabling a production notification. Tests use explicit fixture rules so domain behavior does not depend on deployment configuration.
 
+Ruleset version 1 enables UV and US AQI using documented WHO and AirNow category boundaries. Apparent temperature remains present but disabled with `NOT_CONFIGURED` status until a compatible, locally applicable interpretation is approved. `NOT_CONFIGURED` is deliberately different from `INACTIVE`: it does not claim that conditions are safe and cannot close an existing alert.
+
+Severity intervals are lower-inclusive and upper-exclusive. The pure domain evaluator extracts measurements explicitly from the provider-neutral observation model. It has no AWS, network, environment-variable, or mutable-state dependency.
+
 The evaluator compares the calculated result with the current state:
 
 - Same status and severity: no transition and no notification.
 - Inactive to active: store `OPENED`, update state, notify.
 - Active severity change: store `SEVERITY_CHANGED`, update state, notify.
 - Active to inactive: store `CLOSED`, update state, notify.
+- Disabled rule: return `NOT_CONFIGURED`; do not open, close, or notify.
 
-A conditional DynamoDB update prevents two deliveries of the same observation event from producing duplicate state transitions.
+A DynamoDB transaction atomically advances current state and appends transition history. Every state stores a numeric observation-time watermark and an optimistic-concurrency revision. Conditional writes prevent duplicate or older deliveries from rolling state backward; conflicts are reread and retried up to a fixed bound. The watermark advances even when status and severity remain unchanged.
+
+After a transition commit succeeds, the evaluator publishes one versioned, subscriber-safe SNS message containing the location, alert type, transition, status, severity, measurement value, observation time, and informational-use disclaimer. Unchanged, duplicate, older, and `NOT_CONFIGURED` evaluations publish nothing. Subscriber addresses remain exclusively in SNS. SNS Standard delivery is at least once, so downstream delivery can still be duplicated even though the application emits only one message per committed transition during normal execution.
+
+### Observation event contract and delivery semantics
+
+After DynamoDB confirms that an observation exists, ingestion publishes an `ObservationRecorded` event to the environment-specific custom EventBridge bus. Its source is `ayni-alert.ingestion`; version 1 detail contains `observationId`, `locationId`, `observedAt`, and `observationSchemaVersion`.
+
+Delivery is intentionally at least once. Ingestion republishes after an idempotent duplicate write so a Lambda retry can recover when persistence succeeded but the preceding EventBridge call failed. This can produce duplicate events, which is why the evaluator must use the observation identity and a conditional state update. Publishing only after a newly created write would create a permanent event-loss window between DynamoDB and EventBridge.
 
 ## 9. API Design
 
@@ -185,6 +202,8 @@ GET /v1/locations/{locationId}/history?from=<time>&to=<time>&limit=<n>
 - JSON responses use camelCase.
 - Timestamps use RFC 3339 UTC.
 - Measurements always include units.
+- The latest response includes location-scoped current alert states with their own observation identifiers and timestamps because event evaluation is asynchronous.
+- Alert responses include an informational-use disclaimer and never imply an official warning or guarantee of safety.
 - Errors contain `code`, `message`, and `correlationId`.
 - Internal exceptions and stack traces are never returned.
 - `Cache-Control` is explicit and conservative because freshness matters.

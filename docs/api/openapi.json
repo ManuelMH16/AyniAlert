@@ -1,0 +1,277 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AyniAlert Public API",
+    "version": "0.1.0",
+    "description": "Read-only environmental conditions and informational alert API for the AyniAlert MVP."
+  },
+  "servers": [
+    {
+      "url": "https://sjf63cndec.execute-api.us-east-1.amazonaws.com/dev",
+      "description": "Verified development stage"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Check API process availability",
+        "responses": {
+          "200": {
+            "description": "The API process is available",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/HealthResponse"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/locations/{locationId}/latest": {
+      "get": {
+        "operationId": "getLatestConditions",
+        "summary": "Get latest conditions and current informational alert states",
+        "parameters": [
+          {"$ref": "#/components/parameters/LocationId"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Latest valid observation and current alert states",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/LatestResponse"}
+              }
+            }
+          },
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/v1/locations/{locationId}/history": {
+      "get": {
+        "operationId": "getObservationHistory",
+        "summary": "Get a bounded descending page of observations",
+        "parameters": [
+          {"$ref": "#/components/parameters/LocationId"},
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string", "format": "date-time"}
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string", "format": "date-time"}
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "integer", "minimum": 1, "maximum": 168, "default": 24}
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string", "minLength": 1}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One bounded page of observations",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/HistoryResponse"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/InvalidQuery"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "LocationId": {
+        "name": "locationId",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "enum": ["LIMA_CORPAC"]}
+      }
+    },
+    "responses": {
+      "InvalidQuery": {
+        "description": "One or more query parameters are invalid",
+        "content": {
+          "application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}
+        }
+      },
+      "NotFound": {
+        "description": "The location or observation was not found",
+        "content": {
+          "application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}
+        }
+      },
+      "InternalError": {
+        "description": "The request could not be completed",
+        "content": {
+          "application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}
+        }
+      }
+    },
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "service", "version", "environment", "correlationId"],
+        "properties": {
+          "status": {"type": "string", "const": "ok"},
+          "service": {"type": "string", "const": "ayni-alert"},
+          "version": {"type": "string"},
+          "environment": {"type": "string"},
+          "correlationId": {"type": "string"}
+        }
+      },
+      "MeasurementValue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["value", "unit"],
+        "properties": {
+          "value": {"type": "number"},
+          "unit": {"type": "string"}
+        }
+      },
+      "Observation": {
+        "type": "object",
+        "required": [
+          "schemaVersion", "locationId", "providerObservedAt", "ingestedAt",
+          "coordinates", "measurements", "source"
+        ],
+        "properties": {
+          "schemaVersion": {"type": "integer", "minimum": 1},
+          "locationId": {"type": "string"},
+          "providerObservedAt": {"type": "string", "format": "date-time"},
+          "ingestedAt": {"type": "string", "format": "date-time"},
+          "coordinates": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["latitude", "longitude"],
+            "properties": {
+              "latitude": {"type": "number"},
+              "longitude": {"type": "number"}
+            }
+          },
+          "measurements": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["apparentTemperature", "uvIndex", "usAqi", "pm25"],
+            "properties": {
+              "apparentTemperature": {"$ref": "#/components/schemas/MeasurementValue"},
+              "uvIndex": {"$ref": "#/components/schemas/MeasurementValue"},
+              "usAqi": {"$ref": "#/components/schemas/MeasurementValue"},
+              "pm25": {"$ref": "#/components/schemas/MeasurementValue"}
+            }
+          },
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider", "weatherObservedAt", "airQualityObservedAt"],
+            "properties": {
+              "provider": {"type": "string"},
+              "weatherObservedAt": {"type": "string", "format": "date-time"},
+              "airQualityObservedAt": {"type": "string", "format": "date-time"}
+            }
+          }
+        }
+      },
+      "AlertState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "alertType", "ruleVersion", "measurement", "status", "severity",
+          "value", "observationId", "observedAt"
+        ],
+        "properties": {
+          "alertType": {"type": "string", "enum": ["APPARENT_TEMPERATURE", "UV_INDEX", "US_AQI"]},
+          "ruleVersion": {"type": "integer", "minimum": 1},
+          "measurement": {"type": "string", "enum": ["APPARENT_TEMPERATURE", "UV_INDEX", "US_AQI"]},
+          "status": {"type": "string", "enum": ["INACTIVE", "ACTIVE"]},
+          "severity": {
+            "oneOf": [
+              {"type": "string", "enum": ["ADVISORY", "HIGH", "CRITICAL"]},
+              {"type": "null"}
+            ]
+          },
+          "value": {"type": "number"},
+          "observationId": {"type": "string"},
+          "observedAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "LatestResponse": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          {"$ref": "#/components/schemas/Observation"},
+          {
+            "type": "object",
+            "required": ["freshness", "alertStates", "alertDisclaimer", "correlationId"],
+            "properties": {
+              "freshness": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["status", "ageSeconds"],
+                "properties": {
+                  "status": {"type": "string", "enum": ["FRESH", "STALE"]},
+                  "ageSeconds": {"type": "integer", "minimum": 0}
+                }
+              },
+              "alertStates": {
+                "type": "array",
+                "items": {"$ref": "#/components/schemas/AlertState"}
+              },
+              "alertDisclaimer": {"type": "string", "minLength": 1},
+              "correlationId": {"type": "string"}
+            }
+          }
+        ]
+      },
+      "HistoryResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["locationId", "items", "page", "correlationId"],
+        "properties": {
+          "locationId": {"type": "string"},
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/Observation"}},
+          "page": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["limit", "count", "nextCursor"],
+            "properties": {
+              "limit": {"type": "integer", "minimum": 1, "maximum": 168},
+              "count": {"type": "integer", "minimum": 0},
+              "nextCursor": {
+                "oneOf": [{"type": "string"}, {"type": "null"}]
+              }
+            }
+          },
+          "correlationId": {"type": "string"}
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message", "correlationId"],
+        "properties": {
+          "code": {"type": "string"},
+          "message": {"type": "string"},
+          "correlationId": {"type": "string"}
+        }
+      }
+    }
+  }
+}

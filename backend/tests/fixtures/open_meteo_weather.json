@@ -1,0 +1,18 @@
+{
+  "latitude": -12.126537,
+  "longitude": -76.96942,
+  "utc_offset_seconds": 0,
+  "timezone": "GMT",
+  "current_units": {
+    "time": "iso8601",
+    "interval": "seconds",
+    "apparent_temperature": "°C",
+    "uv_index": ""
+  },
+  "current": {
+    "time": "2026-09-28T05:15",
+    "interval": 900,
+    "apparent_temperature": 20.4,
+    "uv_index": 0.0
+  }
+}

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+
+# AWS SAM
+.aws-sam/
+samconfig.toml
+artifacts/
+
+# Frontend
+node_modules/
+dist/
+
+# IDE and operating system
+.idea/
+.vscode/
+.DS_Store
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key

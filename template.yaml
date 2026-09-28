@@ -1,0 +1,330 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: AyniAlert serverless environmental alert platform
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - prod
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures:
+      - x86_64
+    MemorySize: 128
+    Timeout: 10
+    Tracing: Active
+    Environment:
+      Variables:
+        APP_ENVIRONMENT: !Ref Environment
+        LOG_LEVEL: INFO
+
+Resources:
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      AccessLogSettings:
+        DestinationArn: !GetAtt HttpApiAccessLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId","requestTime":"$context.requestTime",
+          "httpMethod":"$context.httpMethod","routeKey":"$context.routeKey",
+          "status":"$context.status","responseLength":"$context.responseLength",
+          "integrationError":"$context.integrationErrorMessage"}
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 5
+
+  HttpApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/http-api/ayni-alert-${Environment}
+      RetentionInDays: !Ref LogRetentionDays
+
+  ObservationEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub ayni-alert-events-${Environment}
+      Description: !Sub Domain events for AyniAlert ${Environment} environment
+      Tags:
+        - Key: Project
+          Value: AyniAlert
+        - Key: Environment
+          Value: !Ref Environment
+
+  AlertTransitionTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ayni-alert-transitions-${Environment}
+      DisplayName: AyniAlert
+      Tags:
+        - Key: Project
+          Value: AyniAlert
+        - Key: Environment
+          Value: !Ref Environment
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ayni-alert-health-${Environment}
+      CodeUri: backend/src/
+      Handler: ayni_alert.handlers.health.lambda_handler
+      Description: Returns AyniAlert service availability
+      Events:
+        HealthRoute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: GET
+            Path: /health
+
+  HealthFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/ayni-alert-health-${Environment}
+      RetentionInDays: !Ref LogRetentionDays
+
+  IngestionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ayni-alert-ingestion-${Environment}
+      CodeUri: backend/src/
+      Handler: ayni_alert.handlers.ingestion.lambda_handler
+      Description: Ingests current environmental data from Open-Meteo
+      Timeout: 15
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ObservationsTable
+          EVENT_BUS_NAME: !Ref ObservationEventBus
+          LOCATION_ID: LIMA_CORPAC
+          LOCATION_LATITUDE: "-12.0982"
+          LOCATION_LONGITUDE: "-77.0143"
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt ObservationsTable.Arn
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !GetAtt ObservationEventBus.Arn
+      Events:
+        HourlySchedule:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(1 hour)
+            State: ENABLED
+            RetryPolicy:
+              MaximumRetryAttempts: 2
+              MaximumEventAgeInSeconds: 3600
+
+  IngestionFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/ayni-alert-ingestion-${Environment}
+      RetentionInDays: !Ref LogRetentionDays
+
+  EvaluationDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ayni-alert-evaluation-dlq-${Environment}
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: Project
+          Value: AyniAlert
+        - Key: Environment
+          Value: !Ref Environment
+
+  EvaluationDeadLetterQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref EvaluationDeadLetterQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEvaluationRuleFailedDeliveries
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt EvaluationDeadLetterQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt ObservationRecordedRule.Arn
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  EvaluationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ayni-alert-evaluation-${Environment}
+      CodeUri: backend/src/
+      Handler: ayni_alert.handlers.evaluation.lambda_handler
+      Description: Evaluates versioned informational alert rules
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ObservationsTable
+          ALERT_TOPIC_ARN: !Ref AlertTransitionTopic
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+              Resource: !GetAtt ObservationsTable.Arn
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref AlertTransitionTopic
+
+  ObservationRecordedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ayni-alert-evaluate-observation-${Environment}
+      Description: Routes persisted observations to the alert evaluator
+      EventBusName: !Ref ObservationEventBus
+      State: ENABLED
+      EventPattern:
+        source:
+          - ayni-alert.ingestion
+        detail-type:
+          - ObservationRecorded
+      Targets:
+        - Id: AlertEvaluationFunction
+          Arn: !GetAtt EvaluationFunction.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+            MaximumEventAgeInSeconds: 3600
+          DeadLetterConfig:
+            Arn: !GetAtt EvaluationDeadLetterQueue.Arn
+
+  EvaluationFunctionEventBridgePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref EvaluationFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ObservationRecordedRule.Arn
+
+  EvaluationFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/ayni-alert-evaluation-${Environment}
+      RetentionInDays: !Ref LogRetentionDays
+
+  LatestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ayni-alert-latest-${Environment}
+      CodeUri: backend/src/
+      Handler: ayni_alert.handlers.latest.lambda_handler
+      Description: Returns latest conditions and current informational alert states
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ObservationsTable
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !GetAtt ObservationsTable.Arn
+      Events:
+        LatestRoute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: GET
+            Path: /v1/locations/{locationId}/latest
+
+  LatestFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/ayni-alert-latest-${Environment}
+      RetentionInDays: !Ref LogRetentionDays
+
+  HistoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ayni-alert-history-${Environment}
+      CodeUri: backend/src/
+      Handler: ayni_alert.handlers.history.lambda_handler
+      Description: Returns bounded environmental observation history
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ObservationsTable
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !GetAtt ObservationsTable.Arn
+      Events:
+        HistoryRoute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: GET
+            Path: /v1/locations/{locationId}/history
+
+  HistoryFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/ayni-alert-history-${Environment}
+      RetentionInDays: !Ref LogRetentionDays
+
+  ObservationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ayni-alert-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      Tags:
+        - Key: Project
+          Value: AyniAlert
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  HealthEndpoint:
+    Description: Health endpoint for the deployed environment
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${Environment}/health
+  ObservationsTableName:
+    Description: DynamoDB table for observations and alert state
+    Value: !Ref ObservationsTable
+  ObservationEventBusName:
+    Description: Custom EventBridge bus for AyniAlert domain events
+    Value: !Ref ObservationEventBus
+  EvaluationDeadLetterQueueUrl:
+    Description: SQS queue for failed alert-evaluation event deliveries
+    Value: !Ref EvaluationDeadLetterQueue
+  AlertTransitionTopicArn:
+    Description: SNS topic for informational alert-transition notifications
+    Value: !Ref AlertTransitionTopic
