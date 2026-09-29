@@ -1,0 +1,111 @@
+name: Deploy dev
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Test and deploy dev
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      AWS_REGION: us-east-1
+      API_BASE_URL: https://sjf63cndec.execute-api.us-east-1.amazonaws.com/dev
+      DASHBOARD_BUCKET: ayni-alert-dashboard-dev-139438594741-us-east-1
+      DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install backend development dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Test and lint backend
+        run: python -m pytest && python -m ruff check .
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      - name: Validate SAM template
+        run: sam validate --lint --template-file template.yaml
+
+      - name: Package Lambda code
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile
+
+          root = Path("backend/src")
+          files = [
+              path
+              for path in root.rglob("*")
+              if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+          ]
+          with ZipFile("ayni-alert-backend.zip", "w", ZIP_DEFLATED) as archive:
+              for path in files:
+                  archive.write(path, path.relative_to(root))
+          PY
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install and verify frontend
+        working-directory: frontend
+        run: npm ci && npm audit --omit=dev --audit-level=high && npm run typecheck && npm run test:run
+
+      - name: Compile production dashboard
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: ${{ env.API_BASE_URL }}
+        run: npm run build
+
+      - name: Assume AWS deployment role through OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update Lambda function code
+        run: |
+          for function_name in \
+            ayni-alert-health-dev \
+            ayni-alert-ingestion-dev \
+            ayni-alert-evaluation-dev \
+            ayni-alert-latest-dev \
+            ayni-alert-history-dev
+          do
+            aws lambda update-function-code \
+              --function-name "$function_name" \
+              --zip-file fileb://ayni-alert-backend.zip >/dev/null
+          done
+
+      - name: Publish dashboard with explicit cache policies
+        run: |
+          aws s3 sync frontend/dist "s3://${DASHBOARD_BUCKET}" \
+            --delete \
+            --cache-control "no-cache"
+          aws s3 cp frontend/dist/assets "s3://${DASHBOARD_BUCKET}/assets" \
+            --recursive \
+            --cache-control "public,max-age=31536000,immutable"
+
+      - name: Invalidate CloudFront cache
+        run: aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*"

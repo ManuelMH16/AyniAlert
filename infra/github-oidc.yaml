@@ -1,0 +1,90 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: GitHub Actions OIDC deployment role for the existing AyniAlert dev resources
+
+Parameters:
+  GitHubOrganization:
+    Type: String
+    Default: ManuelMH16
+  GitHubRepository:
+    Type: String
+    Default: AyniAlert
+  GitHubEnvironment:
+    Type: String
+    Default: dev
+  DashboardDistributionId:
+    Type: String
+    Description: ID of the existing AyniAlert dev CloudFront distribution
+  ExistingGitHubOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: Leave empty to create the account-level GitHub OIDC provider
+
+Conditions:
+  CreateGitHubOidcProvider: !Equals [!Ref ExistingGitHubOidcProviderArn, ""]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateGitHubOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ayni-alert-github-deploy-dev
+      Description: Least-privilege deployment role assumed by the AyniAlert dev GitHub environment
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateGitHubOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Ref ExistingGitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrganization}/${GitHubRepository}:environment:${GitHubEnvironment}
+      Policies:
+        - PolicyName: DeployAyniAlertApplicationDev
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: UpdateApplicationFunctions
+                Effect: Allow
+                Action: lambda:UpdateFunctionCode
+                Resource:
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ayni-alert-health-dev
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ayni-alert-ingestion-dev
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ayni-alert-evaluation-dev
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ayni-alert-latest-dev
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ayni-alert-history-dev
+              - Sid: ListDashboardBucket
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub arn:${AWS::Partition}:s3:::ayni-alert-dashboard-dev-${AWS::AccountId}-${AWS::Region}
+              - Sid: PublishDashboardObjects
+                Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:PutObject
+                Resource: !Sub arn:${AWS::Partition}:s3:::ayni-alert-dashboard-dev-${AWS::AccountId}-${AWS::Region}/*
+              - Sid: InvalidateDashboardDistribution
+                Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DashboardDistributionId}
+      Tags:
+        - Key: Project
+          Value: AyniAlert
+        - Key: Environment
+          Value: dev
+
+Outputs:
+  GitHubDeployRoleArn:
+    Description: Store this non-secret ARN as AWS_DEPLOY_ROLE_ARN in the GitHub dev environment
+    Value: !GetAtt GitHubDeployRole.Arn
