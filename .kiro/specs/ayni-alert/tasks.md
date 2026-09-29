@@ -101,7 +101,7 @@ Tasks are ordered to produce a deployable vertical slice early. A task is comple
   _Requirements: REQ-10_
 - [x] 6.4 Produce an AWS Pricing Calculator estimate and compare it with initial Cost Explorer data.
   _Requirements: REQ-11_
-- [ ] 6.5 Add GitHub Actions checks and OIDC-based deployment without long-lived AWS keys.  
+- [x] 6.5 Add GitHub Actions checks and OIDC-based deployment without long-lived AWS keys.
   _Requirements: REQ-8, REQ-12_
 - [ ] 6.6 Update README statuses, deployed URL, architecture evidence, limitations, and screenshots.  
   _Requirements: REQ-12_
