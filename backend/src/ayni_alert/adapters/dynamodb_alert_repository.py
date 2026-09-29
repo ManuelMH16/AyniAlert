@@ -7,6 +7,7 @@ from decimal import Decimal
 from numbers import Number
 from typing import Any
 
+from ayni_alert.adapters.aws_resources import dynamodb_resource
 from ayni_alert.application.evaluate_alerts import VersionedAlertState
 from ayni_alert.application.query_observations import CurrentAlertState
 from ayni_alert.domain.alert_rules import (
@@ -134,9 +135,7 @@ class DynamoAlertRepository:
 
     def _get_table(self) -> Any:
         if self._table is None:
-            import boto3
-
-            self._table = boto3.resource("dynamodb").Table(self._table_name)
+            self._table = dynamodb_resource().Table(self._table_name)
         return self._table
 
     def _get_client(self) -> Any:

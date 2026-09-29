@@ -9,6 +9,7 @@ from decimal import Decimal
 from numbers import Number
 from typing import Any
 
+from ayni_alert.adapters.aws_resources import dynamodb_resource
 from ayni_alert.domain.errors import InvalidObservationError, InvalidQueryError
 from ayni_alert.domain.models import Location, Measurements, Observation, SourceMetadata
 
@@ -162,9 +163,7 @@ class DynamoObservationRepository:
 
     def _get_table(self) -> Any:
         if self._table is None:
-            import boto3
-
-            self._table = boto3.resource("dynamodb").Table(self._table_name)
+            self._table = dynamodb_resource().Table(self._table_name)
         return self._table
 
 
