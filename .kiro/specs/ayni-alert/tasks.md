@@ -52,7 +52,7 @@ Tasks are ordered to produce a deployable vertical slice early. A task is comple
   _Requirements: REQ-3, REQ-10_
 - [x] 3.4 Implement `GET /v1/locations/{locationId}/history` parameter validation.  
   _Requirements: REQ-3_
-- [ ] 3.5 Configure API throttling, CORS for the dashboard origin, and read-only IAM permissions.  
+- [x] 3.5 Configure API throttling, CORS for the dashboard origin, and read-only IAM permissions.
   _Requirements: REQ-8_
 - [x] 3.6 Add API contract and deployed smoke tests.  
   _Requirements: REQ-2, REQ-3, REQ-12_
@@ -86,20 +86,20 @@ Tasks are ordered to produce a deployable vertical slice early. A task is comple
   _Requirements: REQ-3, REQ-6_
 - [x] 5.5 Add attribution and informational-use disclaimer.  
   _Requirements: REQ-4, REQ-6_
-- [ ] 5.6 Add responsive component tests and Playwright critical-path coverage.  
+- [x] 5.6 Add responsive component tests and Playwright critical-path coverage.
   _Requirements: REQ-6, REQ-12_
-- [ ] 5.7 Deploy to a private S3 origin behind CloudFront Origin Access Control.  
+- [x] 5.7 Deploy to a private S3 origin behind CloudFront Origin Access Control.
   _Requirements: REQ-8_
 
 ## Phase 6 — Operations and release evidence
 
-- [ ] 6.1 Add custom metrics and CloudWatch alarms for ingestion failure and stale data.  
+- [x] 6.1 Add custom metrics and CloudWatch alarms for ingestion failure and stale data.
   _Requirements: REQ-7, REQ-9_
-- [ ] 6.2 Verify explicit log retention and least-privilege IAM policies.  
+- [x] 6.2 Verify explicit log retention and least-privilege IAM policies.
   _Requirements: REQ-7, REQ-8, REQ-11_
-- [ ] 6.3 Measure API latency at expected MVP load and record results.  
+- [x] 6.3 Measure API latency at expected MVP load and record results.
   _Requirements: REQ-10_
-- [ ] 6.4 Produce an AWS Pricing Calculator estimate and compare it with initial Cost Explorer data.  
+- [x] 6.4 Produce an AWS Pricing Calculator estimate and compare it with initial Cost Explorer data.
   _Requirements: REQ-11_
 - [ ] 6.5 Add GitHub Actions checks and OIDC-based deployment without long-lived AWS keys.  
   _Requirements: REQ-8, REQ-12_

@@ -67,12 +67,16 @@ These exclusions keep the first release small enough to deploy, observe, and imp
 | Latest-observation API | Latest conditions and current location-scoped alert states deployed and publicly verified in `dev` |
 | Observation-history API | Deployed and publicly verified with pagination and validation |
 | Public API contract | OpenAPI 3.1 checked in; four deployed smoke tests passing against `dev` |
-| Public dashboard | Vue 3 TypeScript conditions, alert states, and accessible history experience implemented locally; deployment pending |
+| Public dashboard | Deployed in `dev` through CloudFront with a private, versioned S3 origin and Origin Access Control |
 | Opt-in notifications | SNS topic, confirmed opt-in subscription, and transition-only delivery verified in `dev` |
-| Automated tests | 91 backend and 8 frontend tests passing; four opt-in deployed smoke tests passing |
+| Operational monitoring | Ingestion and freshness metrics published; two CloudWatch alarms in `OK`; operator-only SNS email delivery verified |
+| Security operations | Six log groups verified with 14-day retention; five distinct Lambda execution roles verified against least-privilege permissions |
+| API performance | At 1 request/second and concurrency 2: Latest server p95 57.03 ms, History server p95 123.66 ms, and external combined p95 425.71 ms |
+| Cost control | Pricing Calculator estimate USD 1.50/month; initial Cost Explorer total USD 0.00; account-wide USD 5 monthly budget in `OK` |
+| Automated tests | 95 backend, 8 frontend unit/component, and 6 responsive Playwright tests passing; four deployed smoke tests passing |
 | Deployment pipeline | Planned |
 
-No production deployment is claimed at this stage. In the `dev` environment in `us-east-1`, manual and hourly scheduled Lambda invocations successfully persisted real Open-Meteo observations for `LIMA_CORPAC`. End-to-end ingestion verified automatic `ObservationRecorded` delivery through the custom EventBridge bus, atomic alert-state persistence, and an empty delivery DLQ. A real UV change from `HIGH` to `ADVISORY` produced one `SEVERITY_CHANGED` message through SNS to a confirmed opt-in subscription; replaying the same observation produced no second transition or notification. The public latest endpoint was then verified returning that same UV state as `ACTIVE/ADVISORY` and US AQI as `INACTIVE`, with state-specific observation timestamps and an informational disclaimer. The health and observation-history routes have also been verified through API Gateway. Local verification includes 91 backend tests, while four opt-in smoke tests pass against the deployed `dev` API. Coverage includes provider-response normalization, idempotent DynamoDB serialization, bounded history pagination, current-alert-state projection, the checked-in OpenAPI contract, pure alert evaluation and transitions, EventBridge and SNS publication, conditional alert-state persistence, Python linting, and AWS SAM template validation.
+No production deployment is claimed at this stage. In the `dev` environment in `us-east-1`, manual and hourly scheduled Lambda invocations successfully persisted real Open-Meteo observations for `LIMA_CORPAC`. End-to-end ingestion verified automatic `ObservationRecorded` delivery through the custom EventBridge bus, atomic alert-state persistence, and an empty delivery DLQ. A real UV change from `HIGH` to `ADVISORY` produced one `SEVERITY_CHANGED` message through SNS to a confirmed opt-in subscription; replaying the same observation produced no second transition or notification. The public latest endpoint was then verified returning that same UV state as `ACTIVE/ADVISORY` and US AQI as `INACTIVE`, with state-specific observation timestamps and an informational disclaimer. The health and observation-history routes have also been verified through API Gateway. The Vue dashboard is available through HTTPS from CloudFront, reads its static files from a private S3 origin through OAC, and successfully loads live API data under an origin-specific CORS policy. Ingestion publishes CloudWatch EMF success, failure, freshness, and observation-age metrics. Separate alarms for repeated Lambda failures and missing or stale observations were verified in `OK`, and the operator-only SNS topic delivered a test email. Operational verification also confirmed 14-day retention across the five Lambda log groups and API access log group, plus five distinct Lambda execution roles whose functional permissions match the least-privilege access declared in SAM. A reproducible 60-request load scenario measured server p95 of 57.03 ms for Latest and 123.66 ms for History after SDK-resource reuse and read-function memory tuning; the external combined p95 was 425.71 ms with no errors. Local verification includes 95 backend tests, while four opt-in smoke tests pass against the deployed `dev` API. Coverage includes provider-response normalization, idempotent DynamoDB serialization, bounded history pagination, current-alert-state projection, the checked-in OpenAPI contract, pure alert evaluation and transitions, EventBridge and SNS publication, conditional alert-state persistence, telemetry emission, cached AWS resource reuse, Python linting, and AWS SAM template validation.
 
 ### Verified development endpoints
 
@@ -80,6 +84,12 @@ No production deployment is claimed at this stage. In the `dev` environment in `
 GET https://sjf63cndec.execute-api.us-east-1.amazonaws.com/dev/health
 GET https://sjf63cndec.execute-api.us-east-1.amazonaws.com/dev/v1/locations/LIMA_CORPAC/latest
 GET https://sjf63cndec.execute-api.us-east-1.amazonaws.com/dev/v1/locations/LIMA_CORPAC/history?limit=24
+```
+
+Verified development dashboard:
+
+```text
+https://d14y7sssjz5wu6.cloudfront.net
 ```
 
 These endpoints belong to a development environment and may change or be removed without notice.
@@ -113,7 +123,7 @@ sam validate --lint --template-file template.yaml
 Expected current result:
 
 ```text
-91 passed, 4 skipped
+95 passed, 4 skipped
 All checks passed!
 template.yaml is a valid SAM Template
 ```
@@ -140,10 +150,24 @@ cd frontend
 npm install
 npm run typecheck
 npm run test:run
+npm run test:e2e
 npm run dev
 ```
 
-The development server proxies `/api` to the verified `dev` API, so local development does not require permissive CORS. Current frontend verification is `8 passed`; proxy checks returned both deployed alert states and 21 recent observations. The history chart supports all four measurements and includes an exact tabular alternative.
+The development server proxies `/api` to the verified `dev` API, so local development does not require permissive CORS. Current frontend verification is `8` unit/component tests and `6` Playwright scenarios across desktop and a 360-pixel viewport. The E2E suite covers current data, alert states, accessible history, metric selection, horizontal overflow, and unavailable responses. Proxy checks returned both deployed alert states and 21 recent observations.
+
+### Build and publish the dashboard
+
+Build the static application with the target API base URL:
+
+```bash
+cd frontend
+VITE_API_BASE_URL="https://sjf63cndec.execute-api.us-east-1.amazonaws.com/dev" npm run build
+```
+
+Upload the contents of `frontend/dist/` to the root of the private dashboard bucket. Set `Cache-Control: no-cache` on `index.html` and `Cache-Control: public, max-age=31536000, immutable` on hashed files under `assets/`. CloudFront uses `index.html` as its default root object, redirects viewers to HTTPS, and reads the bucket only through signed Origin Access Control requests. API Gateway CORS allows the CloudFront origin without using a wildcard.
+
+The dashboard resources were initially created and verified manually in `dev`. The SAM template describes the same desired state for reproducible environments; existing manually created resources must be imported or reconciled before making the stack their owner.
 
 ### AWS authentication
 
@@ -258,7 +282,7 @@ The architecture will be revised when implementation evidence exposes different 
 
 - Emit structured JSON logs with correlation identifiers.
 - Track ingestion success, provider errors, stale data, alert transitions, and API failures.
-- Create CloudWatch alarms for repeated ingestion failures and Lambda errors.
+- Alarm on repeated ingestion errors and missing or stale observation heartbeats.
 - Maintain a small operational dashboard for system health.
 
 ## Data Model — Initial Proposal
