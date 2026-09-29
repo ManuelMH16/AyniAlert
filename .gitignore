@@ -16,6 +16,8 @@ artifacts/
 # Frontend
 node_modules/
 dist/
+playwright-report/
+test-results/
 
 # IDE and operating system
 .idea/

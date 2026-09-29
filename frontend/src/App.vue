@@ -27,7 +27,7 @@ const {
   <main class="page-shell">
     <section class="intro" aria-labelledby="page-title">
       <p class="eyebrow">Información ambiental comunitaria</p>
-      <h1 id="page-title">Entendé las condiciones ambientales de tu zona</h1>
+      <h1 id="page-title">Visualiza las condiciones ambientales de tu zona</h1>
       <p class="intro__copy">
         Mediciones recientes y alertas informativas para tomar decisiones cotidianas con mejor contexto.
       </p>
