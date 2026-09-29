@@ -238,6 +238,18 @@ All backend logs use structured JSON with:
 timestamp, level, service, operation, outcome, correlationId, locationId
 ```
 
+The scheduled ingestion handler also writes CloudWatch Embedded Metric Format records in
+the `AyniAlert` namespace. `IngestionSuccess`, `IngestionFailure`,
+`FreshObservationAvailable`, and `ObservationAgeSeconds` use `Environment` and `LocationId`
+dimensions. EMF preserves the serverless logging path and avoids granting the Lambda direct
+`cloudwatch:PutMetricData` permission.
+
+CloudWatch alarms use the native Lambda `Errors` metric for repeated execution failures so
+timeouts and runtime failures remain visible even when application telemetry cannot complete.
+A separate freshness alarm evaluates the custom heartbeat over a two-hour window and treats
+missing data as breaching. Both alarms publish to an operator-only SNS topic, separate from
+community environmental-alert subscriptions.
+
 Sensitive data and full provider payloads are not logged by default. CloudWatch metrics cover ingestion outcomes, rejected responses, observation age, transition count, notification failures, API latency, and API errors.
 
 ## 13. Cost Controls
