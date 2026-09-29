@@ -5,9 +5,15 @@ Parameters:
   GitHubOrganization:
     Type: String
     Default: ManuelMH16
+  GitHubOrganizationId:
+    Type: String
+    Default: "188136588"
   GitHubRepository:
     Type: String
     Default: AyniAlert
+  GitHubRepositoryId:
+    Type: String
+    Default: "1389839266"
   GitHubEnvironment:
     Type: String
     Default: dev
@@ -49,7 +55,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrganization}/${GitHubRepository}:environment:${GitHubEnvironment}
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrganization}@${GitHubOrganizationId}/${GitHubRepository}@${GitHubRepositoryId}:environment:${GitHubEnvironment}
       Policies:
         - PolicyName: DeployAyniAlertApplicationDev
           PolicyDocument:
