@@ -103,6 +103,6 @@ Tasks are ordered to produce a deployable vertical slice early. A task is comple
   _Requirements: REQ-11_
 - [x] 6.5 Add GitHub Actions checks and OIDC-based deployment without long-lived AWS keys.
   _Requirements: REQ-8, REQ-12_
-- [ ] 6.6 Update README statuses, deployed URL, architecture evidence, limitations, and screenshots.  
+- [x] 6.6 Update README statuses, deployed URL, architecture evidence, limitations, and screenshots.
   _Requirements: REQ-12_
-- [ ] 6.7 Perform an MVP review against the AWS Well-Architected pillars and record follow-up items.
+- [x] 6.7 Perform an MVP review against the AWS Well-Architected pillars and record follow-up items.

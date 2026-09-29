@@ -2,21 +2,21 @@
 
 > A serverless community environmental alert platform for Lima, Peru.
 
-[![Project status: In development](https://img.shields.io/badge/status-in%20development-blue)](#project-status)
-[![AWS](https://img.shields.io/badge/cloud-AWS-232F3E?logo=amazonwebservices)](#proposed-aws-architecture)
+[![Project status: MVP deployed in dev](https://img.shields.io/badge/status-MVP%20deployed%20in%20dev-success)](#project-status)
+[![AWS](https://img.shields.io/badge/cloud-AWS-232F3E?logo=amazonwebservices)](#deployed-aws-architecture)
 [![Infrastructure as Code](https://img.shields.io/badge/IaC-AWS%20SAM-blue)](#technology-stack)
 
 ## Overview
 
-AyniAlert is an in-development platform designed to make local environmental conditions easier to understand. It will periodically collect public weather and air-quality data for Lima, evaluate configurable risk thresholds, and expose the results through a public dashboard and opt-in notifications.
+AyniAlert is a deployed development MVP designed to make local environmental conditions easier to understand. It collects public weather and air-quality data hourly for one Lima location, evaluates configurable risk thresholds, and exposes the results through a public dashboard and opt-in notifications.
 
 The first version focuses on three conditions:
 
-- High apparent temperature
+- Apparent temperature monitoring
 - High ultraviolet radiation
 - Poor air quality
 
-The project is intentionally starting with a small, deployable vertical slice. The goal is to demonstrate how a low-cost, event-driven AWS architecture can transform public data into accessible community information without claiming medical authority or replacing official emergency services.
+The project intentionally implements a small, deployable vertical slice. It demonstrates how a low-cost, event-driven AWS architecture can transform public data into accessible community information without claiming medical authority or replacing official emergency services.
 
 ## Problem
 
@@ -31,7 +31,7 @@ Environmental data is available from multiple sources, but raw measurements are 
 
 ## MVP Scope
 
-The minimum viable product will:
+The minimum viable product:
 
 1. Retrieve environmental data for one configured Lima location on a schedule.
 2. Store normalized observations with timestamps and source metadata.
@@ -58,7 +58,7 @@ These exclusions keep the first release small enough to deploy, observe, and imp
 | Capability | Status |
 |---|---|
 | Problem statement and MVP scope | Documented |
-| Proposed AWS architecture | Documented |
+| Deployed AWS architecture | Documented and verified in `dev` |
 | Infrastructure as Code | Implemented; SAM validation passing |
 | Environmental ingestion | Lambda and hourly schedule deployed; manual and automatic ingestion verified in AWS |
 | Alert evaluation | Evaluator Lambda deployed; conditional state and transition persistence verified in `dev` |
@@ -70,13 +70,15 @@ These exclusions keep the first release small enough to deploy, observe, and imp
 | Public dashboard | Deployed in `dev` through CloudFront with a private, versioned S3 origin and Origin Access Control |
 | Opt-in notifications | SNS topic, confirmed opt-in subscription, and transition-only delivery verified in `dev` |
 | Operational monitoring | Ingestion and freshness metrics published; two CloudWatch alarms in `OK`; operator-only SNS email delivery verified |
-| Security operations | Six log groups verified with 14-day retention; five distinct Lambda execution roles verified against least-privilege permissions |
+| Security operations | Six log groups verified with 14-day retention and five distinct Lambda roles observed; the Well-Architected review found one evaluator IAM mismatch to reconcile |
 | API performance | At 1 request/second and concurrency 2: Latest server p95 57.03 ms, History server p95 123.66 ms, and external combined p95 425.71 ms |
 | Cost control | Pricing Calculator estimate USD 1.50/month; initial Cost Explorer total USD 0.00; account-wide USD 5 monthly budget in `OK` |
 | Automated tests | 95 backend, 8 frontend unit/component, and 6 responsive Playwright tests passing; four deployed smoke tests passing |
 | Deployment pipeline | GitHub Actions CI and manual `dev` deployment through short-lived OIDC credentials verified |
 
 No production deployment is claimed at this stage. In the `dev` environment in `us-east-1`, manual and hourly scheduled Lambda invocations successfully persisted real Open-Meteo observations for `LIMA_CORPAC`. End-to-end ingestion verified automatic `ObservationRecorded` delivery through the custom EventBridge bus, atomic alert-state persistence, and an empty delivery DLQ. A real UV change from `HIGH` to `ADVISORY` produced one `SEVERITY_CHANGED` message through SNS to a confirmed opt-in subscription; replaying the same observation produced no second transition or notification. The public latest endpoint was then verified returning that same UV state as `ACTIVE/ADVISORY` and US AQI as `INACTIVE`, with state-specific observation timestamps and an informational disclaimer. The health and observation-history routes have also been verified through API Gateway. The Vue dashboard is available through HTTPS from CloudFront, reads its static files from a private S3 origin through OAC, and successfully loads live API data under an origin-specific CORS policy. Ingestion publishes CloudWatch EMF success, failure, freshness, and observation-age metrics. Separate alarms for repeated Lambda failures and missing or stale observations were verified in `OK`, and the operator-only SNS topic delivered a test email. Operational verification also confirmed 14-day retention across the five Lambda log groups and API access log group, plus five distinct Lambda execution roles whose functional permissions match the least-privilege access declared in SAM. A reproducible 60-request load scenario measured server p95 of 57.03 ms for Latest and 123.66 ms for History after SDK-resource reuse and read-function memory tuning; the external combined p95 was 425.71 ms with no errors. Local verification includes 95 backend tests, while four opt-in smoke tests pass against the deployed `dev` API. Coverage includes provider-response normalization, idempotent DynamoDB serialization, bounded history pagination, current-alert-state projection, the checked-in OpenAPI contract, pure alert evaluation and transitions, EventBridge and SNS publication, conditional alert-state persistence, telemetry emission, cached AWS resource reuse, Python linting, and AWS SAM template validation.
+
+> **Review correction:** The later static Well-Architected review found that the evaluator code uses `dynamodb:TransactWriteItems` while the SAM role declares `GetItem` and `PutItem`. The observed deployment worked, but the role and template must be reconciled before the SAM definition can be treated as reproducible least privilege.
 
 ### Verified development endpoints
 
@@ -93,6 +95,36 @@ https://d14y7sssjz5wu6.cloudfront.net
 ```
 
 These endpoints belong to a development environment and may change or be removed without notice.
+
+### Dashboard screenshots
+
+| Desktop — 1280 px | Mobile — 390 px |
+|---|---|
+| [![AyniAlert dashboard on desktop](docs/screenshots/dashboard-desktop.png)](docs/screenshots/dashboard-desktop.png) | [![AyniAlert dashboard on mobile](docs/screenshots/dashboard-mobile.png)](docs/screenshots/dashboard-mobile.png) |
+
+### Release evidence
+
+- **Deployed application revision:** [`78b1d56`](https://github.com/ManuelMH16/AyniAlert/tree/78b1d56c2b17d44a3a564bd5264b67720a9c2160) from `main`, deployed to `dev` in `us-east-1`.
+- **Deployment:** [successful Deploy dev run](https://github.com/ManuelMH16/AyniAlert/actions/runs/36536877807) using GitHub OIDC and no long-lived AWS credentials.
+- **Post-deployment documentation baseline:** [`8a3bab7`](https://github.com/ManuelMH16/AyniAlert/tree/8a3bab7cd60f0c949f4da3eb631b1925114efbf0), verified by this [successful CI run](https://github.com/ManuelMH16/AyniAlert/actions/runs/36537758905).
+- **Infrastructure:** [`template.yaml`](template.yaml) and the separate [`infra/github-oidc.yaml`](infra/github-oidc.yaml) bootstrap stack.
+- **API contract:** [OpenAPI 3.1](docs/api/openapi.json).
+- **Measured performance:** [MVP latency evidence](docs/performance/mvp-latency-dev.md).
+- **Cost controls:** [estimate, Cost Explorer comparison, and budget evidence](docs/cost/mvp-cost-estimate-dev.md).
+- **Architecture review:** [AWS Well-Architected MVP review and prioritized follow-ups](docs/well-architected/mvp-review-dev.md).
+
+### Known limitations
+
+- This is a development deployment with no production SLA; its public URL and stored data may be changed or removed.
+- Coverage is limited to `LIMA_CORPAC`; multi-location support and multi-region recovery are outside the MVP.
+- Availability and freshness depend on Open-Meteo and the hourly ingestion schedule. The dashboard exposes timestamps and stale or unavailable states rather than presenting old data as current.
+- Apparent temperature is displayed but has no alert thresholds because no locally applicable rule source has been approved.
+- SNS Standard is an at-least-once service, so a rare transport-level duplicate remains possible even though the application suppresses unchanged alert transitions.
+- Alert notifications are currently best-effort: an SNS failure after committing a transition can cause the retry to recognize that observation as already processed and omit the notification.
+- The public API is intentionally read-only and throttled; the MVP has no user accounts or personalized threshold management.
+- The evaluator's deployed IAM permissions must be reconciled with SAM because the code uses `TransactWriteItems` while the template currently declares `PutItem`.
+- Some `dev` resources were created manually before being represented in SAM. They must be imported or reconciled before CloudFormation can safely own the complete stack.
+- The repository does not yet declare a software license.
 
 ## Local Development
 
@@ -175,7 +207,7 @@ Use an individual IAM or IAM Identity Center identity with MFA and least privile
 
 GitHub Actions runs backend and frontend checks for pull requests and pushes to `main`. The `Deploy dev` workflow is started manually from `main`, repeats the release checks, assumes `ayni-alert-github-deploy-dev` through GitHub OIDC, updates the five application Lambdas, publishes the dashboard to S3, and invalidates CloudFront. The trust policy is restricted to the `dev` environment and the immutable GitHub owner and repository IDs; no long-lived AWS access keys are stored in GitHub. The complete path was verified by [Deploy dev run #3](https://github.com/ManuelMH16/AyniAlert/actions/runs/36536877807).
 
-## Proposed AWS Architecture
+## Deployed AWS Architecture
 
 ```mermaid
 flowchart LR
@@ -244,7 +276,7 @@ SNS messages are emitted only for committed `OPENED`, `SEVERITY_CHANGED`, and `C
 | CloudWatch | Logs, metrics, dashboards, and alarms | Centralized operational visibility across serverless components |
 | AWS SAM | Infrastructure as Code | Repeatable serverless deployments using a small declarative template |
 
-The architecture will be revised when implementation evidence exposes different requirements. Services are selected to solve specific responsibilities, not to maximize the number of AWS products used.
+The architecture can be revised when implementation evidence exposes different requirements. Services are selected to solve specific responsibilities, not to maximize the number of AWS products used.
 
 ## Quality Attributes
 
@@ -287,9 +319,9 @@ The architecture will be revised when implementation evidence exposes different 
 - Alarm on repeated ingestion errors and missing or stale observation heartbeats.
 - Maintain a small operational dashboard for system health.
 
-## Data Model — Initial Proposal
+## Data Model — MVP Implementation
 
-A single DynamoDB table is proposed for the MVP:
+The MVP uses a single DynamoDB table:
 
 ```text
 PK                       SK                              Entity
@@ -309,9 +341,9 @@ The design will not be generalized for multiple locations until that requirement
 
 ## Data Source and Responsible Use
 
-The MVP plans to use the [Open-Meteo Weather API](https://open-meteo.com/en/docs) and [Open-Meteo Air Quality API](https://open-meteo.com/en/docs/air-quality-api). Provider attribution, licensing, request limits, and usage conditions will be reviewed before public deployment.
+The MVP uses the [Open-Meteo Weather API](https://open-meteo.com/en/docs) and [Open-Meteo Air Quality API](https://open-meteo.com/en/docs/air-quality-api). The dashboard attributes the provider and identifies AyniAlert as an informational, non-official service.
 
-Alert thresholds will be configurable and documented with their sources. AyniAlert will display measurement timestamps and data freshness so users can distinguish current information from stale data.
+Alert thresholds are configurable and documented with their sources. AyniAlert displays measurement timestamps and data freshness so users can distinguish current information from stale data.
 
 ### Development alert thresholds — ruleset version 1
 
@@ -337,9 +369,9 @@ The versioned configuration lives in `backend/src/ayni_alert/domain/default_aler
 - **Frontend:** Vue 3 and TypeScript
 - **Testing:** pytest, Vitest, and Playwright
 - **CI/CD:** GitHub Actions with short-lived AWS credentials through OpenID Connect
-- **Development workflow:** Kiro specs, Git, and Architecture Decision Records
+- **Development workflow:** Kiro specs, Git, and documented architecture rationale
 
-## Planned Repository Structure
+## Repository Structure
 
 ```text
 .
@@ -349,23 +381,27 @@ The versioned configuration lives in `backend/src/ayni_alert/domain/default_aler
 │   ├── functions/           # Lambda handlers and application modules
 │   └── tests/
 ├── frontend/                # Public Vue dashboard
-├── infrastructure/          # AWS SAM templates and deployment configuration
+├── infra/                   # GitHub OIDC bootstrap infrastructure
+├── scripts/                 # Reproducible operational measurements
+├── template.yaml            # Main AWS SAM infrastructure definition
 ├── docs/
-│   ├── adr/                 # Architecture Decision Records
-│   └── diagrams/            # Exported architecture diagrams
+│   ├── api/                 # Versioned OpenAPI contract
+│   ├── cost/                # Cost and budget evidence
+│   ├── performance/         # Latency method and results
+│   └── screenshots/         # Deployed dashboard evidence
 └── README.md
 ```
 
 ## Delivery Roadmap
 
-### Phase 1 — Walking skeleton
+### Phase 1 — Walking skeleton (completed)
 
 - Define requirements and acceptance criteria in Kiro.
 - Create the SAM application and least-privilege IAM roles.
 - Ingest and persist one real observation on a schedule.
 - Expose a health endpoint and the latest observation.
 
-### Phase 2 — Functional MVP
+### Phase 2 — Functional MVP (completed)
 
 - Implement threshold evaluation and alert-state transitions.
 - Add the Vue dashboard and recent observation history.
@@ -373,16 +409,16 @@ The versioned configuration lives in `backend/src/ayni_alert/domain/default_aler
 - Add structured logs, alarms, tests, and a cost estimate.
 - Publish the first deployment and document verification evidence.
 
-### Phase 3 — Evidence-driven improvements
+### Phase 3 — Evidence-driven improvements (in progress)
 
 - Gather usability feedback.
 - Add locations only when supported by a validated use case.
-- Review the workload against the AWS Well-Architected Framework.
+- Address the prioritized follow-ups from the documented AWS Well-Architected MVP review.
 - Evaluate whether forecasting or generated summaries add measurable value.
 
 ## Architecture Decisions
 
-Architecture decisions will be recorded under `docs/adr/`. Initial decisions to document include:
+The implemented design and its rationale are maintained in [the Kiro design document](.kiro/specs/ayni-alert/design.md). Converting the following decisions into standalone ADRs remains follow-up work:
 
 - ADR-001: Use a serverless architecture for the MVP.
 - ADR-002: Use DynamoDB with explicit access patterns.
@@ -392,19 +428,19 @@ Architecture decisions will be recorded under `docs/adr/`. Initial decisions to 
 
 ## Kiro-Assisted Development
 
-Kiro will be used to refine requirements, design documents, implementation tasks, and code. Generated output will be reviewed, tested, and owned by the project author. AI assistance does not replace architectural reasoning, security review, or validation against deployed behavior.
+Kiro has been used to refine requirements, design documents, implementation tasks, and code. Generated output is reviewed, tested, and owned by the project author. AI assistance does not replace architectural reasoning, security review, or validation against deployed behavior.
 
 ## Success Criteria for the First Release
 
-The first release will be considered functional when:
+The development MVP is considered functional because:
 
-- Infrastructure can be deployed reproducibly from the repository.
+- The desired infrastructure is versioned in SAM, with the manual-resource reconciliation limitation stated above.
 - A scheduled execution stores valid environmental observations.
 - The public API returns the latest observation and its freshness.
 - The dashboard displays real data from the deployed API.
-- One configured threshold can open and close an alert without duplicate notifications.
+- Configured thresholds produce state transitions without duplicate application notifications for unchanged observations.
 - Automated tests pass and operational alarms are configured.
-- The README links to deployment evidence and an architecture-cost estimate.
+- Deployment, architecture, performance, and cost evidence is linked above.
 
 ## Author
 
