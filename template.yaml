@@ -34,6 +34,8 @@ Resources:
       CorsConfiguration:
         AllowOrigins:
           - !Sub https://${DashboardDistribution.DomainName}
+          - https://aynialert.com
+          - https://www.aynialert.com
         AllowHeaders:
           - Content-Type
         AllowMethods:
